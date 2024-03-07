@@ -3,13 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"k8s.io/cli-runtime/pkg/printers"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/rest"
@@ -78,11 +79,14 @@ type GetOptions struct {
 	Sort           bool
 	IgnoreNotFound bool
 	Export         bool
+
+	genericclioptions.IOStreams
 }
 
 func NewOptions() *GetOptions {
 	return &GetOptions{
 		PrintFlags: get.NewGetPrintFlags(),
+		IOStreams:  genericclioptions.IOStreams{In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr},
 	}
 }
 
@@ -138,6 +142,7 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 		ExportParam(o.Export).
 		ResourceTypeOrNameArgs(true, args...).
 		ContinueOnError().
+		//TransformRequests(o.transformRequests).
 		Latest().
 		Flatten().
 		Do()
@@ -147,20 +152,21 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 		return err
 	}
 
-	objs := make([]runtime.Object, len(infos))
-	for ix := range infos {
-		objs[ix] = infos[ix].Object
-	}
-
 	generator := kprinters.NewTableGenerator().With(printersinternal.AddHandlers)
 	printer, err := o.PrintFlags.ToPrinter()
 	if err != nil {
 		return err
 	}
-	for _, obj := range objs {
-		deploy, ok := obj.(*apps.Deployment)
+	// track if we write any output
+	trackingWriter := &trackingWriterWrapper{Delegate: o.Out}
+	// output an empty line separating output
+	separatorWriter := &separatorWriterWrapper{Delegate: trackingWriter}
+
+	w := printers.GetNewTabWriter(separatorWriter)
+	for _, info := range infos {
+		deploy, ok := info.Object.(*apps.Deployment)
 		if !ok {
-			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			obj, err := legacyscheme.Scheme.ConvertToVersion(info.Object, apps.SchemeGroupVersion)
 			if err != nil {
 				continue
 			}
@@ -170,8 +176,9 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 		if err != nil {
 			continue
 		}
-		printer.PrintObj(table, os.Stdout)
+		printer.PrintObj(table, w)
 	}
+	w.Flush()
 	return nil
 }
 
@@ -186,4 +193,33 @@ func (o *GetOptions) transformRequests(req *rest.Request) {
 	if o.Sort {
 		req.Param("includeObject", "Object")
 	}
+}
+
+type trackingWriterWrapper struct {
+	Delegate io.Writer
+	Written  int
+}
+
+func (t *trackingWriterWrapper) Write(p []byte) (n int, err error) {
+	t.Written += len(p)
+	return t.Delegate.Write(p)
+}
+
+type separatorWriterWrapper struct {
+	Delegate io.Writer
+	Ready    bool
+}
+
+func (s *separatorWriterWrapper) Write(p []byte) (n int, err error) {
+	// If we're about to write non-empty bytes and `s` is ready,
+	// we prepend an empty line to `p` and reset `s.Read`.
+	if len(p) != 0 && s.Ready {
+		fmt.Fprintln(s.Delegate)
+		s.Ready = false
+	}
+	return s.Delegate.Write(p)
+}
+
+func (s *separatorWriterWrapper) SetReady(state bool) {
+	s.Ready = state
 }
