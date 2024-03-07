@@ -4,12 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"k8s.io/apimachinery/pkg/util/duration"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -158,7 +161,7 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 		return err
 	}
 
-	generator := kprinters.NewTableGenerator().With(printersinternal.AddHandlers)
+	generator := kprinters.NewTableGenerator().With(printersinternal.AddHandlers).With(addHandlers)
 
 	// track if we write any output
 	trackingWriter := &trackingWriterWrapper{Delegate: o.Out}
@@ -206,8 +209,43 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 	return utilerrors.NewAggregate(allErrs)
 }
 
-func printPod(pod *core.Pod, options kprinters.GenerateOptions) ([]metav1.TableRow, error) {
-	return nil, nil
+func addHandlers(h kprinters.PrintHandler) {
+	column := []metav1.TableColumnDefinition{
+		{Name: "Name", Type: "string", Format: "name", Description: metav1.ObjectMeta{}.SwaggerDoc()["name"]},
+		{Name: "Ready", Type: "string", Description: "The aggregate readiness state of this obj for accepting traffic."},
+	}
+	h.TableHandler(column, printUnstructuredList)
+	h.TableHandler(column, printUnstructured)
+}
+
+func printUnstructuredList(objList *unstructured.UnstructuredList, options kprinters.GenerateOptions) ([]metav1.TableRow, error) {
+	rows := make([]metav1.TableRow, 0, len(objList.Items))
+	for i := range objList.Items {
+		r, err := printUnstructured(&objList.Items[i], options)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, r...)
+	}
+	return rows, nil
+}
+
+func printUnstructured(obj *unstructured.Unstructured, options kprinters.GenerateOptions) ([]metav1.TableRow, error) {
+	row := metav1.TableRow{
+		Object: runtime.RawExtension{Object: obj},
+	}
+	row.Cells = append(row.Cells, obj.GetName(), translateTimestampSince(obj.GetCreationTimestamp()))
+	return []metav1.TableRow{row}, nil
+}
+
+// translateTimestampSince returns the elapsed time since timestamp in
+// human-readable approximation.
+func translateTimestampSince(timestamp metav1.Time) string {
+	if timestamp.IsZero() {
+		return "<unknown>"
+	}
+
+	return duration.HumanDuration(time.Since(timestamp.Time))
 }
 
 func shouldGetNewPrinterForMapping(printer printers.ResourcePrinter, lastMapping, mapping *meta.RESTMapping) bool {
