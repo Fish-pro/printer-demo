@@ -188,6 +188,7 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 				separatorWriter.SetReady(true)
 			}
 
+			o.PrintFlags.SetKind(info.Object.GetObjectKind().GroupVersionKind().GroupKind())
 			printer, err = o.PrintFlags.ToPrinter()
 			if err != nil {
 				if !errs.Has(err.Error()) {
