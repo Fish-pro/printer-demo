@@ -4,14 +4,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"k8s.io/cli-runtime/pkg/printers"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
@@ -19,6 +23,8 @@ import (
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/apps"
+	"k8s.io/kubernetes/pkg/apis/batch"
+	"k8s.io/kubernetes/pkg/apis/core"
 	kprinters "k8s.io/kubernetes/pkg/printers"
 	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
 )
@@ -153,33 +159,59 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 	}
 
 	generator := kprinters.NewTableGenerator().With(printersinternal.AddHandlers)
-	printer, err := o.PrintFlags.ToPrinter()
-	if err != nil {
-		return err
-	}
+
 	// track if we write any output
 	trackingWriter := &trackingWriterWrapper{Delegate: o.Out}
 	// output an empty line separating output
 	separatorWriter := &separatorWriterWrapper{Delegate: trackingWriter}
-
 	w := printers.GetNewTabWriter(separatorWriter)
+
+	allErrs := []error{}
+	errs := sets.NewString()
+	var printer kprinters.ResourcePrinter
+	var lastMapping *meta.RESTMapping
 	for _, info := range infos {
-		deploy, ok := info.Object.(*apps.Deployment)
-		if !ok {
-			obj, err := legacyscheme.Scheme.ConvertToVersion(info.Object, apps.SchemeGroupVersion)
+		mapping := info.Mapping
+		if shouldGetNewPrinterForMapping(printer, lastMapping, mapping) {
+			w.Flush()
+			w.SetRememberedWidths(nil)
+
+			// add linebreaks between resource groups (if there is more than one)
+			// when it satisfies all following 3 conditions:
+			// 1) it's not the first resource group
+			// 2) it has row header
+			// 3) we've written output since the last time we started a new set of headers
+			if lastMapping != nil && !o.NoHeaders && trackingWriter.Written > 0 {
+				separatorWriter.SetReady(true)
+			}
+
+			printer, err = o.PrintFlags.ToPrinter()
 			if err != nil {
+				if !errs.Has(err.Error()) {
+					errs.Insert(err.Error())
+					allErrs = append(allErrs, err)
+				}
 				continue
 			}
-			deploy = obj.(*apps.Deployment)
+			lastMapping = mapping
 		}
-		table, err := generator.GenerateTable(deploy, kprinters.GenerateOptions{})
+		table, err := ConvertResource(generator, info.Object)
 		if err != nil {
-			continue
+			return err
 		}
 		printer.PrintObj(table, w)
 	}
 	w.Flush()
-	return nil
+
+	return utilerrors.NewAggregate(allErrs)
+}
+
+func printPod(pod *core.Pod, options kprinters.GenerateOptions) ([]metav1.TableRow, error) {
+	return nil, nil
+}
+
+func shouldGetNewPrinterForMapping(printer printers.ResourcePrinter, lastMapping, mapping *meta.RESTMapping) bool {
+	return printer == nil || lastMapping == nil || mapping == nil || mapping.Resource != lastMapping.Resource
 }
 
 func (o *GetOptions) transformRequests(req *rest.Request) {
@@ -222,4 +254,371 @@ func (s *separatorWriterWrapper) Write(p []byte) (n int, err error) {
 
 func (s *separatorWriterWrapper) SetReady(state bool) {
 	s.Ready = state
+}
+
+func ConvertResource(generator *kprinters.HumanReadableGenerator, obj runtime.Object) (*metav1.Table, error) {
+	switch obj.GetObjectKind().GroupVersionKind().Kind {
+	case "Deployment":
+		v, ok := obj.(*apps.Deployment)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.Deployment)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "DeploymentList":
+		v, ok := obj.(*apps.DeploymentList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.DeploymentList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Statefulset":
+		v, ok := obj.(*apps.StatefulSet)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.StatefulSet)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "StatefulsetList":
+		v, ok := obj.(*apps.StatefulSetList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.StatefulSetList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Pod":
+		v, ok := obj.(*core.Pod)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Pod)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "PodList":
+		v, ok := obj.(*core.PodList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.PodList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Service":
+		v, ok := obj.(*core.Service)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Service)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ServiceList":
+		v, ok := obj.(*core.ServiceList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ServiceList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Secret":
+		v, ok := obj.(*core.Secret)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Secret)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "SecretList":
+		v, ok := obj.(*core.SecretList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.SecretList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Configmap":
+		v, ok := obj.(*core.ConfigMap)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ConfigMap)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ConfigmapList":
+		v, ok := obj.(*core.ConfigMapList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ConfigMapList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ReplicaSet":
+		v, ok := obj.(*apps.ReplicaSet)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.ReplicaSet)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ReplicaSetList":
+		v, ok := obj.(*apps.ReplicaSetList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.ReplicaSetList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "DaemonSet":
+		v, ok := obj.(*apps.DaemonSet)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, batch.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.DaemonSet)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "DaemonSetList":
+		v, ok := obj.(*apps.DaemonSetList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*apps.DaemonSetList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Job":
+		v, ok := obj.(*batch.Job)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*batch.Job)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "JobList":
+		v, ok := obj.(*batch.JobList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, batch.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*batch.JobList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "CronJob":
+		v, ok := obj.(*batch.CronJob)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, batch.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*batch.CronJob)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "CronJobList":
+		v, ok := obj.(*batch.CronJobList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, batch.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*batch.CronJobList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Endpoints":
+		v, ok := obj.(*core.Endpoints)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Endpoints)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "EndpointsList":
+		v, ok := obj.(*core.EndpointsList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.EndpointsList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Node":
+		v, ok := obj.(*core.Node)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Node)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "NodeList":
+		v, ok := obj.(*core.NodeList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.NodeList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Event":
+		v, ok := obj.(*core.Event)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Event)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "EventList":
+		v, ok := obj.(*core.EventList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.EventList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Namespace":
+		v, ok := obj.(*core.Namespace)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.Namespace)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "NamespaceList":
+		v, ok := obj.(*core.NamespaceList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.NamespaceList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ServiceAccount":
+		v, ok := obj.(*core.ServiceAccount)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ServiceAccount)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ServiceAccountList":
+		v, ok := obj.(*core.ServiceAccountList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ServiceAccountList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Persistentvolume":
+		v, ok := obj.(*core.PersistentVolume)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.PersistentVolume)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "PersistentvolumeList":
+		v, ok := obj.(*core.PersistentVolumeList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.PersistentVolumeList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Persistentvolumeclaim":
+		v, ok := obj.(*core.PersistentVolumeClaim)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.PersistentVolumeClaim)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "PersistentvolumeclaimList":
+		v, ok := obj.(*core.PersistentVolumeClaimList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.PersistentVolumeClaimList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "Resourcequota":
+		v, ok := obj.(*core.ResourceQuota)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ResourceQuota)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	case "ResourcequotaList":
+		v, ok := obj.(*core.ResourceQuotaList)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, core.SchemeGroupVersion)
+			if err != nil {
+				return nil, err
+			}
+			v = obj.(*core.ResourceQuotaList)
+		}
+		return generator.GenerateTable(v, kprinters.GenerateOptions{})
+	default:
+		return generator.GenerateTable(obj, kprinters.GenerateOptions{})
+	}
 }
