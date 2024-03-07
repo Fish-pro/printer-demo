@@ -11,13 +11,15 @@ import (
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
-	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/cli-runtime/pkg/resource"
 	"k8s.io/client-go/rest"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/kubectl/pkg/cmd/get"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
-	"k8s.io/kubectl/pkg/scheme"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
+	"k8s.io/kubernetes/pkg/apis/apps"
+	kprinters "k8s.io/kubernetes/pkg/printers"
+	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
 )
 
 func main() {
@@ -55,9 +57,8 @@ func main() {
 }
 
 type GetOptions struct {
-	CmdParent string
-
-	ToPrinter func() (printers.ResourcePrinterFunc, error)
+	PrintFlags *get.PrintFlags
+	CmdParent  string
 
 	resource.FilenameOptions
 
@@ -73,8 +74,6 @@ type GetOptions struct {
 	Namespace         string
 	ExplicitNamespace bool
 
-	ServerPrint bool
-
 	NoHeaders      bool
 	Sort           bool
 	IgnoreNotFound bool
@@ -83,7 +82,7 @@ type GetOptions struct {
 
 func NewOptions() *GetOptions {
 	return &GetOptions{
-		ServerPrint: true,
+		PrintFlags: get.NewGetPrintFlags(),
 	}
 }
 
@@ -94,13 +93,14 @@ func NewGetCommand(f cmdutil.Factory) *cobra.Command {
 		Short: "get demo",
 		Long:  "get demo",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := o.Complet(f, cmd, args); err != nil {
+			if err := o.Complete(f, cmd, args); err != nil {
 				return err
 			}
 			return o.Run(f, cmd, args)
 		},
 	}
 
+	o.PrintFlags.AddFlags(cmd)
 	cmd.Flags().StringVar(&o.Raw, "raw", o.Raw, "Raw URI to request from the server.  Uses the transport specified by the kubeconfig file.")
 	cmd.Flags().BoolVarP(&o.Watch, "watch", "w", o.Watch, "After listing/getting the requested object, watch for changes. Uninitialized objects are excluded if no object name is provided.")
 	cmd.Flags().BoolVar(&o.WatchOnly, "watch-only", o.WatchOnly, "Watch for changes to the requested object(s), without listing/getting first.")
@@ -116,16 +116,7 @@ func NewGetCommand(f cmdutil.Factory) *cobra.Command {
 	return cmd
 }
 
-func (o *GetOptions) Complet(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
-	o.ToPrinter = func() (printers.ResourcePrinterFunc, error) {
-		printer := printers.NewTablePrinter(printers.PrintOptions{})
-		printer, err := printers.NewTypeSetter(scheme.Scheme).WrapToPrinter(printer, nil)
-		if err != nil {
-			return nil, err
-		}
-		printer = &get.TablePrinter{Delegate: printer}
-		return printer.PrintObj, nil
-	}
+func (o *GetOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	var err error
 	o.Namespace, o.ExplicitNamespace, err = f.ToRawKubeConfigLoader().Namespace()
 	if err != nil {
@@ -149,14 +140,9 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 		ContinueOnError().
 		Latest().
 		Flatten().
-		TransformRequests(o.transformRequests).
 		Do()
 
 	infos, err := r.Infos()
-	if err != nil {
-		return err
-	}
-	printer, err := o.ToPrinter()
 	if err != nil {
 		return err
 	}
@@ -165,8 +151,26 @@ func (o *GetOptions) Run(f cmdutil.Factory, cmd *cobra.Command, args []string) e
 	for ix := range infos {
 		objs[ix] = infos[ix].Object
 	}
+
+	generator := kprinters.NewTableGenerator().With(printersinternal.AddHandlers)
+	printer, err := o.PrintFlags.ToPrinter()
+	if err != nil {
+		return err
+	}
 	for _, obj := range objs {
-		printer.PrintObj(obj, os.Stdout)
+		deploy, ok := obj.(*apps.Deployment)
+		if !ok {
+			obj, err := legacyscheme.Scheme.ConvertToVersion(obj, apps.SchemeGroupVersion)
+			if err != nil {
+				continue
+			}
+			deploy = obj.(*apps.Deployment)
+		}
+		table, err := generator.GenerateTable(deploy, kprinters.GenerateOptions{})
+		if err != nil {
+			continue
+		}
+		printer.PrintObj(table, os.Stdout)
 	}
 	return nil
 }

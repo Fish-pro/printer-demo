@@ -8,7 +8,8 @@ require (
 	k8s.io/cli-runtime v0.18.3
 	k8s.io/client-go v0.18.3
 	k8s.io/component-base v0.18.3
-	k8s.io/kubectl v0.0.0-00010101000000-000000000000
+	k8s.io/kubectl v0.0.0
+	k8s.io/kubernetes v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -18,6 +19,7 @@ require (
 	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
 	github.com/chai2010/gettext-go v0.0.0-20160711120539-c6fed771bfd5 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/docker/distribution v2.7.1+incompatible // indirect
 	github.com/docker/docker v0.7.3-0.20190327010347-be7ac8be2ae0 // indirect
 	github.com/docker/spdystream v0.0.0-20160310174837-449fdfce4d96 // indirect
 	github.com/emicklei/go-restful v2.9.5+incompatible // indirect
@@ -45,6 +47,7 @@ require (
 	github.com/mitchellh/go-wordwrap v1.0.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.1 // indirect
+	github.com/opencontainers/go-digest v1.0.0-rc1 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/russross/blackfriday v1.5.2 // indirect
@@ -60,6 +63,7 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.2.8 // indirect
 	k8s.io/api v0.18.3 // indirect
+	k8s.io/apiserver v0.18.3 // indirect
 	k8s.io/klog v1.0.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20200410145947-61e04a5be9a6 // indirect
 	k8s.io/utils v0.0.0-20200324210504-a9aa75ae1b89 // indirect
@@ -70,8 +74,27 @@ require (
 )
 
 replace (
+	k8s.io/api => k8s.io/api v0.18.3
+	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.18.3
 	k8s.io/apimachinery => k8s.io/apimachinery v0.18.3
+	k8s.io/apiserver => k8s.io/apiserver v0.18.3
 	k8s.io/cli-runtime => k8s.io/cli-runtime v0.18.3
 	k8s.io/client-go => k8s.io/client-go v0.18.3
+	k8s.io/cloud-bootstrap => k8s.io/cloud-bootstrap v0.18.3
+	k8s.io/cloud-provider => k8s.io/cloud-provider v0.18.3
+	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.18.3
+	k8s.io/code-generator => k8s.io/code-generator v0.18.3
+	k8s.io/component-base => k8s.io/component-base v0.18.3
+	k8s.io/cri-api => k8s.io/cri-api v0.18.3
+	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.18.3
+	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.18.3
+	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.18.3
+	k8s.io/kube-proxy => k8s.io/kube-proxy v0.18.3
+	k8s.io/kube-scheduler => k8s.io/kube-scheduler v0.18.3
 	k8s.io/kubectl => k8s.io/kubectl v0.18.3
+	k8s.io/kubelet => k8s.io/kubelet v0.18.3
+	k8s.io/kubernetes => k8s.io/kubernetes v1.18.3
+	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.18.3
+	k8s.io/metrics => k8s.io/metrics v0.18.3
+	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.18.3
 )
