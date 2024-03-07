@@ -34,9 +34,9 @@ import (
 
 func main() {
 	cmd := cobra.Command{
-		Use:   "selfctl",
-		Short: "selfctl is demo cli",
-		Long:  "selfctl is demo cli",
+		Use:   "kget",
+		Short: "kget is demo cli",
+		Long:  "kget is demo cli",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
 		},
